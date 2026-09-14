@@ -1,0 +1,138 @@
+# Fork-only: publish binaries built from main as a GitHub Release.
+#
+# This fork's main is upstream main plus the commits we carry on top (the
+# CRI rootfs-size change of containerd/containerd#14070). The CRI nodes run
+# a containerd built from here because the erofs writable-layer size and the
+# containerd.io/snapshot/max-size label exist only on upstream main, in no
+# release yet. Built daily, and on every push to main, as one prerelease
+# per day tagged `main.<yyyymmdd>`: a second build on the same day replaces
+# the day's release, a day on which main did not move is skipped, and only
+# the last 30 are kept. `containerd --version` reports the tag and the
+# commit it was built from.
+#
+# Syncing main: git reset --hard upstream/main; git cherry-pick -x <our
+# commits>; git push --force-with-lease origin main.
+#
+# Built with upstream's own release Dockerfile (.github/workflows/release/),
+# so the tarballs have the same layout as an upstream release:
+#   containerd-<ver>-linux-<arch>.tar.gz          dynamic build, bin/
+#   containerd-static-<ver>-linux-<arch>.tar.gz   static build, bin/
+name: Fork release
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Tag and whether this commit is already released
+    if: github.repository != 'containerd/containerd'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      skip: ${{ steps.ver.outputs.skip }}
+    steps:
+      - id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "tag=main.$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          # A scheduled run on a day main did not move would republish the
+          # same binaries under a new date; the release notes carry the
+          # commit, so look for it there.
+          if gh release list -R "${GITHUB_REPOSITORY}" --limit 50 --json tagName,body \
+               --jq '.[]|select(.body|contains("'"${GITHUB_SHA}"'"))|.tagName' | grep -q .; then
+            echo "already released: ${GITHUB_SHA}"; echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          use: true
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      - name: Make
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          RELEASE_VER: ${{ needs.check.outputs.tag }}
+        run: |
+          docker buildx build \
+            --cache-from=type=gha,scope=containerd-release --cache-to=type=gha,scope=containerd-release \
+            --build-arg RELEASE_VER --build-arg UBUNTU_VERSION=22.04 \
+            -f .github/workflows/release/Dockerfile --platform="${PLATFORM}" -o releases/ .
+          find ./releases/ -maxdepth 1 -type l | xargs rm -f
+          echo "PLATFORM_CLEAN=${PLATFORM/\//-}" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fork-release-${{ env.PLATFORM_CLEAN }}
+          path: releases/*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: fork-release-*
+          merge-multiple: true
+          path: releases
+      - name: Release notes
+        env:
+          RELEASE_VER: ${{ needs.check.outputs.tag }}
+        run: |
+          git remote add upstream https://github.com/containerd/containerd.git
+          git fetch -q upstream main
+          base=$(git merge-base HEAD upstream/main)
+          {
+            echo "Built from \`${GITHUB_SHA}\` = upstream \`${base:0:12}\` plus:"
+            echo
+            git log --format='- %h %s' "${base}..HEAD"
+            echo
+            echo "Not an upstream release. \`containerd --version\` reports \`${RELEASE_VER} ${GITHUB_SHA}\`."
+          } > notes.md
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VER: ${{ needs.check.outputs.tag }}
+        run: |
+          (cd releases && sha256sum *.tar.gz > SHA256SUMS)
+          # One release per day: a second build today replaces the first.
+          gh release delete "${RELEASE_VER}" -R "${GITHUB_REPOSITORY}" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "${RELEASE_VER}" -R "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --prerelease \
+            --title "${RELEASE_VER}" --notes-file notes.md releases/*.tar.gz releases/*.sha256sum releases/SHA256SUMS
+          # Keep the last 30 days.
+          gh release list -R "${GITHUB_REPOSITORY}" --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E '^main\.[0-9]{8}$' | sort -r | tail -n +31 \
+            | xargs -r -n1 gh release delete -R "${GITHUB_REPOSITORY}" --cleanup-tag --yes
