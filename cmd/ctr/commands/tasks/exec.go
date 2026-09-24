@@ -69,6 +69,8 @@ var execCommand = &cli.Command{
 			Usage: "User id or name",
 		},
 	},
+	DisableSliceFlagSeparator: true,
+	StopOnNthArg:              new(1),
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		var (
 			id     = cmd.Args().First()

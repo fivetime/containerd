@@ -48,6 +48,7 @@ var Command = &cli.Command{
 		checkpointCommand,
 		restoreCommand,
 	},
+	DisableSliceFlagSeparator: true,
 }
 
 var createCommand = &cli.Command{
@@ -88,6 +89,8 @@ var createCommand = &cli.Command{
 		}
 		return nil
 	},
+	DisableSliceFlagSeparator: true,
+	StopOnNthArg:              new(2),
 }
 
 var listCommand = &cli.Command{
@@ -102,6 +105,7 @@ var listCommand = &cli.Command{
 			Usage:   "Print only the container id",
 		},
 	},
+	DisableSliceFlagSeparator: true,
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		var (
 			filters = cmd.Args().Slice()
@@ -156,6 +160,7 @@ var deleteCommand = &cli.Command{
 			Usage: "Do not clean up snapshot with container",
 		},
 	},
+	DisableSliceFlagSeparator: true,
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		var exitErr error
 		client, ctx, cancel, err := commands.NewClient(ctx, cmd)
@@ -242,6 +247,7 @@ var setLabelsCommand = &cli.Command{
 
 		return nil
 	},
+	DisableSliceFlagSeparator: true,
 }
 
 var infoCommand = &cli.Command{
@@ -254,6 +260,7 @@ var infoCommand = &cli.Command{
 			Usage: "Only display the spec",
 		},
 	},
+	DisableSliceFlagSeparator: true,
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		id := cmd.Args().First()
 		if id == "" {
