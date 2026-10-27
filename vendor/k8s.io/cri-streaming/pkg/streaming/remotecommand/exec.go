@@ -45,7 +45,23 @@ func ServeExec(w http.ResponseWriter, req *http.Request, executor Executor, podN
 	}
 	defer ctx.conn.Close()
 
-	err := executor.ExecInContainer(req.Context(), podName, uid, container, cmd, ctx.stdinStream, ctx.stdoutStream, ctx.stderrStream, ctx.tty, ctx.resizeChan, 0)
+	// The exec lives as long as its client does. The runtime kills the
+	// process when this context ends; over SPDY the request context already
+	// ends on disconnect, over a websocket only the connection says so.
+	// (fivetime fork)
+	execCtx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	if ctx.closed != nil {
+		go func() {
+			select {
+			case <-ctx.closed:
+				cancel()
+			case <-execCtx.Done():
+			}
+		}()
+	}
+
+	err := executor.ExecInContainer(execCtx, podName, uid, container, cmd, ctx.stdinStream, ctx.stdoutStream, ctx.stderrStream, ctx.tty, ctx.resizeChan, 0)
 	if err != nil {
 		if exitErr, ok := err.(utilexec.ExitError); ok && exitErr.Exited() {
 			rc := exitErr.ExitStatus()

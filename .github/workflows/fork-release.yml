@@ -1,7 +1,9 @@
 # Fork-only: publish binaries built from main as a GitHub Release.
 #
 # This fork's main is upstream main plus the commits we carry on top (the
-# CRI rootfs-size change of containerd/containerd#14070). The CRI nodes run
+# CRI rootfs-size change of containerd/containerd#14070, and the exec
+# streaming patch in vendor/ guarded by
+# internal/cri/server/streaming_fork_test.go). The CRI nodes run
 # a containerd built from here because the erofs writable-layer size and the
 # containerd.io/snapshot/max-size label exist only on upstream main, in no
 # release yet. Built daily, and on every push to main, as one prerelease

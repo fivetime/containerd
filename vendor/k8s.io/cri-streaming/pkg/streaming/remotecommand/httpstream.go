@@ -77,6 +77,11 @@ type connectionContext struct {
 	resizeStream io.ReadCloser
 	resizeChan   chan TerminalSize
 	tty          bool
+	// closed, when set, is closed once the client's connection has ended.
+	// SPDY needs none: its request context is cancelled on disconnect.
+	// A websocket's is not, so without this an exec outlived its client.
+	// (fivetime fork)
+	closed <-chan struct{}
 }
 
 // streamAndReply holds both a Stream and a channel that is closed when the stream's reply frame is

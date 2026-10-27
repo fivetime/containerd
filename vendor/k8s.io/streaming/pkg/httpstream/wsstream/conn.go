@@ -189,6 +189,7 @@ type Conn struct {
 	channels         []*websocketChannel
 	codec            codecType
 	ready            chan struct{}
+	done             chan struct{} // closed when the server returns; see Done (fivetime fork)
 	ws               *websocket.Conn
 	timeout          time.Duration
 }
@@ -203,8 +204,15 @@ type Conn struct {
 func NewConn(protocols map[string]ChannelProtocolConfig) *Conn {
 	return &Conn{
 		ready:     make(chan struct{}),
+		done:      make(chan struct{}),
 		protocols: protocols,
 	}
+}
+
+// Done is closed when the connection has ended, from either side.
+// (fivetime fork)
+func (conn *Conn) Done() <-chan struct{} {
+	return conn.done
 }
 
 // SetIdleTimeout sets the interval for both reads and writes before timeout. If not specified,
@@ -231,6 +239,7 @@ func (conn *Conn) Open(w http.ResponseWriter, req *http.Request) (string, []io.R
 		// If websocket server returns, propagate panic if necessary. Otherwise,
 		// signal HTTPServe finished by closing "serveHTTPComplete".
 		defer func() {
+			close(conn.done)
 			if p := recover(); p != nil {
 				panicChan <- p
 			} else {
