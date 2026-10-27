@@ -129,6 +129,14 @@ func createWebSocketStreams(req *http.Request, w http.ResponseWriter, opts *Opti
 		resizeStream: streams[resizeChannel],
 		closed:       conn.Done(),
 	}
+	if !opts.Stdin {
+		// No stdin was asked for, so hand the runtime none, as SPDY does.
+		// Channel 0 still exists (ignored), but passing it on made the
+		// runtime open a stdin for the exec and close it at once, and on
+		// kata closing an exec's stdin stops its stdout: output past the
+		// guest's pipe buffer then never arrives. (fivetime fork)
+		ctx.stdinStream = nil
+	}
 
 	switch negotiatedProtocol {
 	case v4BinaryWebsocketProtocol, v4Base64WebsocketProtocol, v5BinaryWebsocketProtocol:

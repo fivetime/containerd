@@ -54,6 +54,10 @@ func (r *forkStreamRuntime) PortForward(context.Context, string, int32, io.ReadW
 // dialExec starts a stream server around rt and opens an exec on it over a
 // websocket speaking protocol.
 func dialExec(t *testing.T, rt streaming.Runtime, protocol string) *websocket.Conn {
+	return dialExecWith(t, rt, protocol, true)
+}
+
+func dialExecWith(t *testing.T, rt streaming.Runtime, protocol string, stdin bool) *websocket.Conn {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(nil)
 	base, err := url.Parse("http://" + srv.Listener.Addr().String())
@@ -72,7 +76,7 @@ func dialExec(t *testing.T, rt streaming.Runtime, protocol string) *websocket.Co
 	t.Cleanup(srv.Close)
 
 	resp, err := ss.GetExec(&runtimeapi.ExecRequest{
-		ContainerId: "c", Cmd: []string{"cat"}, Stdin: true, Stdout: true,
+		ContainerId: "c", Cmd: []string{"cat"}, Stdin: stdin, Stdout: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -166,5 +170,27 @@ func TestForkExecWebsocketDisconnectCancels(t *testing.T) {
 				t.Fatal("the exec's context was not cancelled after its client disconnected")
 			}
 		})
+	}
+}
+
+// An exec that did not ask for stdin gets none, as over SPDY. Handing on the
+// ignored channel made containerd open a stdin for the exec and close it at
+// once; on kata that stops the exec's stdout, so output past the guest's pipe
+// buffer never arrived (2 MB stalled at 32-64 KiB on the testbed).
+func TestForkExecWebsocketWithoutStdinGivesNone(t *testing.T) {
+	gotIn := make(chan io.Reader, 1)
+	rt := &forkStreamRuntime{exec: func(_ context.Context, in io.Reader, _ io.WriteCloser) error {
+		gotIn <- in
+		return nil
+	}}
+	ws := dialExecWith(t, rt, "v5.channel.k8s.io", false)
+	defer ws.Close()
+	select {
+	case in := <-gotIn:
+		if in != nil {
+			t.Fatalf("the runtime was given a stdin (%T) that was not asked for", in)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the exec never reached the runtime")
 	}
 }
